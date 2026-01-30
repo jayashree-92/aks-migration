@@ -1,0 +1,49 @@
+jobs:
+- deployment: DB_Deploy
+  displayName: Flyway DB Deploy ${{ parameters.environment }}
+  dependsOn:
+    - UI_Deploy
+    - Kong_Deploy
+    - ${{ each service in parameters.SERVICENAME }}:
+      - Deploy_${{replace(service, '-', '_')}}
+  condition: and(and(not(canceled()),not(failed())), eq(variables['DB_Deploy'],'true'))
+  cancelTimeoutInMinutes: 1
+  environment: ${{ parameters.environment }}
+  strategy:
+    runOnce:
+        deploy:
+            steps:
+                - checkout: CICD_Agent_Portal_NodeJS
+                  clean: true
+
+                - task: Bash@3
+                  inputs:
+                    targettype: 'inline'
+                    script: flyway -v
+                  displayName: 'Flyway version'
+
+                - task: Bash@3
+                  inputs:
+                    targettype: 'inline'
+                    script: flyway migrate -baselineOnMigrate="true" -url=jdbc:postgresql://$(DB_HOSTNAME):$(DB_PORT)/$(DB_NAME) -user=$(DB_USERNAME) -password=$(DB_PASSWORD)
+                  displayName: 'Flyway Migrate'
+
+                - task: Bash@3
+                  inputs:
+                    targettype: 'inline'
+                    script: flyway info -url=jdbc:postgresql://$(DB_HOSTNAME):$(DB_PORT)/$(DB_NAME) -user=$(DB_USERNAME) -password=$(DB_PASSWORD)
+                  displayName: 'Flyway Info'
+
+                - task: Bash@3
+                  inputs:
+                    targettype: 'inline'
+                    script: flyway validate -url=jdbc:postgresql://$(DB_HOSTNAME):$(DB_PORT)/$(DB_NAME) -user=$(DB_USERNAME) -password=$(DB_PASSWORD)
+                  displayName: 'Flyway validate'
+
+                # Publish the html report as artifacts to be able to download them into your local
+                - task: PublishPipelineArtifact@1
+                  condition: succeededOrFailed()
+                  inputs:
+                    targetPath: "$(System.DefaultWorkingDirectory)/report.html"
+                    artifact: "Flyway Report - $(ENVIRONMENT)"
+                    publishLocation: 'pipeline'

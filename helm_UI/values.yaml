@@ -1,0 +1,37 @@
+# Default values for chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+#NB: We need to quote the yes and no else helm will change it to true and false
+
+deployment:
+  name: "nextjsapp"
+  replica: 1
+  terminationGracePeriodSeconds: 30
+  serviceAccount: ""
+
+route:
+  annotations:
+    haproxy.router.openshift.io/balance: "roundrobin"
+    haproxy.router.openshift.io/disable_cookies: 'true'
+    haproxy.router.openshift.io/timeout: "30s"
+    openshift.io/host.generated: 'true'
+
+containers:
+  nextjsapp:
+    env:
+      timezone: "Pacific/Auckland"
+      muser: "svc_api_dot_k8agents"
+    image:
+      name: "agent_portal_nextjsapp"
+      repository: "devops-container-registry.artifacts.internal.spark.co.nz/cicdapp"
+      pullPolicy: "Always"
+      tag: ""
+    resourceLimits:
+      cpu: "600m"
+      memory: "600Mi"
+    resourceRequests:
+      cpu: "200m"
+      memory: "600Mi"
+      
+service:
+  ingressIp: ""

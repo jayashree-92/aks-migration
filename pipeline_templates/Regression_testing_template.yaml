@@ -1,0 +1,66 @@
+jobs:
+- job: Job
+  displayName: Regression Testing - Playwright
+  dependsOn:
+    - UI_Deploy
+    - Kong_Deploy
+    - DB_Deploy
+    - ${{ each service in parameters.SERVICENAME }}:
+      - Deploy_${{replace(service, '-', '_')}}
+    - ${{ each service in parameters.SERVICENAME }}:
+      - Testing_${{ replace(service, '-', '_') }}
+  condition: and(eq(variables['Regression_Test'],'true'),and(not(canceled()),not(failed())))
+  cancelTimeoutInMinutes: 1
+
+  variables:
+  - name: 'http_proxy'
+    value: 'http://proxy.telecom.tcnz.net:80'
+  - name: 'https_proxy'
+    value: 'http://proxy.telecom.tcnz.net:80'
+  - name: 'no_proxy'
+    value: '.telecom.tcnz.net,.spark.co.nz'
+
+  steps:
+  - checkout: CICD_Agent_Portal
+
+  - bash: |
+      echo "Playwright Version"
+      
+      cd playwright-testing
+
+      npm install
+
+      npx playwright --version
+    displayName: "Print Playwright version"
+
+  - bash: |
+      echo "##[debug] Running Playwright tests"
+      PLAYWRIGHT_PASSWORD=$(PLAYWRIGHT_PASSWORD) PLAYWRIGHT_STD_USER_PASSWORD=$(PLAYWRIGHT_STD_USER_PASSWORD) ADO_PAT_TOKEN=$(AGENT_PORTAL_PAT) npx playwright test --project=chromium
+    workingDirectory: 'playwright-testing'
+    displayName: "Run Playwright test"
+
+  # Publish the html report as artifacts to be able to download them into your local
+  - task: PublishPipelineArtifact@1
+    condition: succeededOrFailed()
+    inputs:
+      targetPath: "$(System.DefaultWorkingDirectory)/playwright-testing/playwright-report/index.html"
+      artifact: 'HTML Report'
+      publishLocation: 'pipeline'
+
+  # Publish the screenshots as artifacts to be able to download them into your local
+  - task: PublishPipelineArtifact@1
+    condition: Failed()
+    inputs:
+      targetPath: "$(System.DefaultWorkingDirectory)/playwright-testing/test-results/"
+      artifact: 'Screenshots of Failed Tests'
+      publishLocation: 'pipeline'
+
+  # Publish the test results to see them in pipeline menu
+  - task: PublishTestResults@2
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: "$(System.DefaultWorkingDirectory)/playwright-testing/junit-report.xml"
+      failTaskOnFailedTests: false
+      testRunTitle: 'Playwright Tests'
+      publishRunAttachments: false

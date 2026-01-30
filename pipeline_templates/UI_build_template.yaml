@@ -1,0 +1,194 @@
+stages:
+- stage: build
+  dependsOn: []
+  variables:
+  - name: AQUA_URL
+    value: https://api.asia-1.supply-chain.cloud.aquasec.com
+  - name: CSPM_URL
+    value: https://asia-1.api.cloudsploit.com
+
+  displayName: Build
+  
+  jobs:
+  - job: AgentPortalBuild
+    pool:
+      name: ocp-dot-adreport1
+      demands:
+        - AGENT_TYPE -equals $(AGENT_TYPE)
+    displayName: Portal UI Build
+    cancelTimeoutInMinutes: 1
+    steps:
+    - checkout: git://Spark/CICD_Agent_Portal@$(Build.SourceBranch)
+      fetchDepth: 0
+      clean: true
+
+    - script: |
+        echo "Environment variables"
+        printenv
+      displayName: Initialize Environment Variables
+
+    - task: npmAuthenticate@0
+      displayName: npm Authenticate .npmrc
+      inputs:
+        workingFile: .npmrc
+
+    - task: SonarQubePrepare@4
+      displayName: Prepare analysis on SonarQube
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+      inputs:
+        SonarQube: SonarQubeDev 7
+        scannerMode: CLI
+        configMode: manual
+        cliProjectKey: agent-portal-ui
+        cliProjectName: agent-portal-ui
+        extraProperties: |
+          # Additional properties that will be passed to the scanner, 
+          # Put one key=value per line, example:
+          sonar.exclusions=node_modules/**, coverage/**, public/**, build/**
+		      sonar.javascript.file.suffixes=.js,.jsx
+          sonar.tests=/test
+          sonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+    - task: SonarQubeAnalyze@4
+      displayName: Run Code Analysis
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+
+    - task: SonarQubePublish@4
+      displayName: Publish Quality Gate Result
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+
+    - task: trivy@1
+      inputs:
+        version: 'latest'
+        docker: false
+        path: '$(Build.SourcesDirectory)'
+        aquaKey: '$(AQUA_API_KEY)'
+        aquaSecret: '$(AQUA_API_PASSWORD)' 
+        
+    - bash: |
+        podman login registry.aquasec.com -u ${AQUA_REGISTRY_USERNAME} -p $(AQUA_REGISTRY_PASSWORD)
+      displayName: Login to Aqua registry
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+
+    - task: Bash@3
+      displayName: Create New Docker Image
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+      inputs:
+        targetType: inline
+        script:  |
+          #! /bin/bash
+          #Docker image needs to be tagged with lower casing.
+          TAG_NAME=$(echo "agent_portal_nextjsapp":${BUILD_BUILDID}_${BUILD_SOURCEBRANCHNAME} | tr '[A-Z]' '[a-z]')  
+          IMAGE_TAG=$(DOCKER_REGISTRY_COMMON)/cicdapp/$TAG_NAME
+          echo "##vso[task.setvariable variable=IMAGE_TAG]$IMAGE_TAG"
+          
+          echo "##[debug] Running Docker Commands"
+          if [ $BUILD_REASON == "PullRequest" ]; then
+            docker build -t $IMAGE_TAG --target builder -f docker/dockerfile .
+          else
+            docker build -t $IMAGE_TAG -f docker/dockerfile .
+          fi
+          
+          PROCESS_STATUS=$?
+          
+          if [ $PROCESS_STATUS -ne 0 ]; then
+              echo "##[error] Build failed .. quiting"
+              exit 1
+          fi
+
+    - task: aquasecScanner@4
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+      inputs:
+        image: ${IMAGE_TAG}
+        scanType: 'local'
+        containerRuntime: 'podman'
+        hideBase: false
+        showNegligible: false
+        scanner: 'registry.aquasec.com/scanner:2022.4.460'
+        registerCompliant: true 
+        registry: 'devops-container-registry'
+        connection: 'Aqua - ADO-Image-Scanning-DevOps-Tooling'
+        runOptions: '--group-add keep-groups -e XDG_RUNTIME_DIR=$(XDG_RUNTIME_DIR) -e DOCKER_HOST=unix://$(XDG_RUNTIME_DIR)/podman/podman.sock -v $(SPARK_ROOT_CA_CRT):/etc/ssl/certs/ca-certificate.crt'
+        caCertificates: true
+
+    - task: CmdLine@2
+      displayName: "Manifest Generation"
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+      inputs: 
+        script: |-
+            image = ${IMAGE_TAG}
+            export BILLY_SERVER=https://billy.asia-1.codesec.aquasec.com
+            curl -sLo install.sh download.codesec.aquasec.com/billy/install.sh
+            curl -sLo install.sh.checksum https://github.com/argonsecurity/releases/releases/latest/download/install.sh.checksum
+            if ! cat install.sh.checksum | sha256sum --check; then
+              echo "install.sh checksum failed"
+              exit 1
+            fi
+            BINDIR="." sh install.sh
+            rm install.sh install.sh.checksum
+            ./billy generate \
+              --access-token $(System.AccessToken) \
+              --aqua-key $(AQUA_API_KEY) \
+              --aqua-secret $(AQUA_API_PASSWORD) \
+              --cspm-url https://asia-1.api.cloudsploit.com \
+              --artifact-path $image
+            
+              # The docker image name:tag of the newly built image
+              # --artifact-path  my-image-name:${versionEnv}        
+              # OR the path to the root folder of your project. I.e my-repo/my-app 
+              # --artifact-path  ${env.MY_APP_ROOT}
+
+    - task: Bash@3
+      displayName: Tag and push the image
+      condition: and(succeeded(), eq(variables['SONAR_ANALYSIS'], 'YES'))
+      inputs:
+        targetType: inline
+        script: >
+          #! /bin/bash
+
+          #Docker image needs to be tagged with lower casing.
+
+          #TAG_NAME=$(echo "agent_portal_nextjsapp":${BUILD_BUILDID}_${BUILD_SOURCEBRANCHNAME} | tr '[A-Z]' '[a-z]')
+
+          #login to docker registry
+          
+          docker login -u "$(DEVOPS_CONTAINER_REGISTRY_USER)" -p "$(DEVOPS_CONTAINER_REGISTRY_PWR)" $(DOCKER_REGISTRY_COMMON)
+          
+          
+          #Check if docker login succeeded.
+
+          PROCESS_STATUS=$?
+
+          if [ $PROCESS_STATUS -ne 0 ]; then
+              echo "Docker login failed .. quiting"
+              exit 1
+          fi
+
+
+          #tag docker image using the dockerfile cloned from git
+
+          #docker tag $TAG_NAME $(DOCKER_REGISTRY_COMMON)/$(REGISTRY_PROJECT)/$TAG_NAME
+
+
+          #Push the image to dockerhub
+
+
+          docker push $IMAGE_TAG
+
+          #check if the Push went through.
+
+          PROCESS_STATUS=$?
+
+
+          if [ $PROCESS_STATUS -ne 0 ]; then
+              echo "Docker push failed .. quiting"
+              exit 1
+          fi
+
+
+          #Clean up intermediate images created on the VSTS build machine.
+
+          docker rmi $IMAGE_TAG
+
+          #docker rmi $TAG_NAME
+    

@@ -1,0 +1,174 @@
+jobs:
+- deployment: Deploy_${{ replace(parameters.SERVICENAME, '-', '_') }}
+  displayName: ${{ parameters.SERVICENAME }} Deployment ${{ parameters.environment }}
+  cancelTimeoutInMinutes: 1
+  environment: ${{ parameters.environment }}
+  dependsOn: 
+    - UI_Deploy
+    - Kong_Deploy
+  condition: and(and(not(canceled()),not(failed())), and(eq(variables['service_deploy'],'true'), ne(variables['Build.Reason'], 'PullRequest')))
+  variables:
+  - name: 'SERVICENAME'
+    value: ${{ parameters.SERVICENAME }}
+  - name: 'revisionId_services'
+    value: ${{ parameters.revisionId_services }}
+  - name: 'sourceBranch'
+    value: ${{ parameters.sourceBranch }}
+  strategy:
+    runOnce:
+        deploy:
+            steps:
+                - checkout: cicd-agent
+                  clean: true
+                - checkout: CICD_Agent_Portal_NodeJS
+
+                - script: |
+                    echo "Deployment of Service : $(SERVICENAME)"
+                    echo "Environment variables"
+                    printenv
+                  displayName: 'Initialize Environment Variables'
+
+                - script: |
+                    #!/bin/bash
+                    #As a developer, only develop/release branch can be deployed to Dev Environment. Only release branch can be deployed to all higher environments.
+                    if [[ $ENVIRONMENT == 'dev' ]] ;
+                    then
+                            echo "This is dev hence you are allowed to deploy any branch"
+                    elif [[ $ENVIRONMENT == "dev" || $ENVIRONMENT == "int"  ]] && [[ $(sourceBranch) == "develop/"* || $(sourceBranch) == "Develop/"* ]] ;
+                    then
+                            echo "Deployment Source Branch Validated"
+                    elif [[ $ENVIRONMENT != 'dev' ]] && [[ $(sourceBranch) == "release/"*  || $(sourceBranch) == "Release/"* ]] ;
+                    then
+                            echo "Deployment Source Branch Validated"
+                    else
+                            echo "##[error] Deployment Source Branch Validation Failed. You cannot Deploy Branch $(sourceBranch) to $ENVIRONMENT Environment."
+                            exit 1
+                    fi
+                  displayName: 'Pre Validate Deployment Source Branch'
+                
+                - bash: |
+                    mkdir -p CICD_Agent_Portal_cicd/helm_services/files/
+                    echo "Copying Configs from $(System.DefaultWorkingDirectory)/CICD_Agent_Portal_NodeJS/$(SERVICENAME)/configs/$(ENVIRONMENT)/*"
+                    cp $(System.DefaultWorkingDirectory)/CICD_Agent_Portal_NodeJS/$(SERVICENAME)/configs/$(ENVIRONMENT)/* CICD_Agent_Portal_cicd/helm_services/files/
+
+                  displayName: 'Copy Config Files'
+                  
+                - bash: |
+                    cd CICD_Agent_Portal_cicd/encryption
+                    echo "Current Working Directory : "
+                    pwd
+                    echo "------------------- Starting NPM Install-------------------"
+                    npm install crypto@^1.0.1
+                    DB_CONN_STR="postgresql://$(DB_USERNAME):$(DB_PASSWORD)@$(DB_HOSTNAME):$(DB_PORT)/$(DB_NAME)"
+                    OUTPUT=`node encrypt.js $(ENCRYPTION_KEY) $DB_CONN_STR $(KEYCLOAK_CLIENT_ID) $(ADO_AGENT_PASSWORD) $(AGENT_PORTAL_PAT) $(OCP4_CICDDEPLOY_TOKEN) $(OCP_LDAP_USER_PASSWORD)`
+                    DBURL=`echo $OUTPUT | cut -d " " -f2`
+                    echo "##vso[task.setvariable variable=DBURLSECRET;issecret=true]$DBURL"
+                    CLIENTID=`echo $OUTPUT | cut -d " " -f4`
+                    echo "##vso[task.setvariable variable=CLIENTIDSECRET;issecret=true]$CLIENTID"
+                    KEYCLOAKPASSWORD=`echo $OUTPUT | cut -d " " -f6`
+                    echo "##vso[task.setvariable variable=KEYCLOAKPASSWORDSECRET;issecret=true]$KEYCLOAKPASSWORD"
+                    ADO_PAT_TOKEN=`echo $OUTPUT | cut -d " " -f8`
+                    echo "##vso[task.setvariable variable=ADOPATTOKENSECRET;issecret=true]$ADO_PAT_TOKEN"
+                    OCP4_CICDDEPLOY_TOKEN=`echo $OUTPUT | cut -d " " -f10`
+                    echo "##vso[task.setvariable variable=OCP4TOKEN;issecret=true]$OCP4_CICDDEPLOY_TOKEN"
+                    OCP_LDAP_USER_PASSWORD=`echo $OUTPUT | cut -d " " -f12`
+                    echo "##vso[task.setvariable variable=OCPLDAPUSERPASSWORD;issecret=true]$OCP_LDAP_USER_PASSWORD"
+                  displayName: Encrypt Secrets
+
+                - script: |
+                    set -x
+                    BUILD_BUILDID_LOWER=$(echo $(revisionId_services) | tr '[:upper:]' '[:lower:]')
+                    BUILD_SOURCEBRANCHNAME_LOWER=$(echo $(sourceBranch) | awk -F"/" '{print $NF}' | tr '[:upper:]' '[:lower:]')
+                    TAG=$BUILD_BUILDID_LOWER"_"$BUILD_SOURCEBRANCHNAME_LOWER
+                    IMAGE_NAME=$(SERVICENAME)":"$TAG
+
+                    curl --fail $(NEXUS_REPO)/devops-container-registry/v2/cicdapp/$(SERVICENAME)/manifests/$TAG
+                    res=$?
+                    if [ $res -ne 0 ]; then
+                        echo "Image does not exist. Please build the services to be deployed"
+                        exit 1
+                    else
+                        echo "Image exists"
+                    fi
+                  displayName: 'Check if image exist'
+ 
+                - bash: |
+                    set -x
+                    BUILD_BUILDID_LOWER=$(echo $(revisionId_services) | tr '[:upper:]' '[:lower:]')
+                    BUILD_SOURCEBRANCHNAME_LOWER=$(echo $(sourceBranch) | awk -F"/" '{print $NF}' | tr '[:upper:]' '[:lower:]')
+                    TAG=$BUILD_BUILDID_LOWER"_"$BUILD_SOURCEBRANCHNAME_LOWER
+
+                    echo "Helm Dry Run:"
+                    helm template -n $(PROJECT) --debug --dry-run \
+                      --set-string deployment.name=$(SERVICENAME) \
+                      --set-string deployment.replica=$(REPLICA) \
+                      --set-string containers.repository=$(DOCKER_REGISTRY_COMMON) \
+                      --set-string containers.nodejsapp.image.tag=$TAG \
+                      --set-string containers.nodejsapp.image.name=$(SERVICENAME) \
+                      --set-string containers.nodejsapp.resourceLimits.cpu=$(CPU_LIMIT) \
+                      --set-string containers.nodejsapp.resourceLimits.memory=$(MEMORY_LIMIT) \
+                      --set-string containers.nodejsapp.resourceRequests.cpu=$(CPU_REQUEST) \
+                      --set-string containers.nodejsapp.resourceRequests.memory=$(MEMORY_REQUEST) \
+                      --set-string secret.data.encryptionKey=$(ENCRYPTION_KEY) \
+                      --set-string secret.data.dbURL=$(DBURLSECRET) \
+                      --set-string secret.data.keycloakClientID=$(CLIENTIDSECRET) \
+                      --set-string secret.data.keycloakUsername=$(ADO_AGENT_USERNAME) \
+                      --set-string secret.data.keycloakPassword=$(KEYCLOAKPASSWORDSECRET) \
+                      --set-string secret.data.keycloakClientUID=$(KEYCLOAK_CLIENT_UID) \
+                      --set-string secret.data.keycloakAdminRoleId=$(KEYCLOAK_ADMIN_ROLE_ID) \
+                      --set-string secret.data.keycloakStandardRoleId=$(KEYCLOAK_STANDARD_ROLE_ID) \
+                      --set-string secret.data.keycloakMemberRoleId=$(KEYCLOAK_MEMBER_ROLE_ID) \
+                      --set-string secret.data.sparkRootCert=$(SPARK_ROOT_CERT) \
+                      --set-string secret.data.adoPatToken=$(ADOPATTOKENSECRET) \
+                      --set-string secret.data.ocp4Url=$(OCP4_URL) \
+                      --set-string secret.data.ocp4AgentUrl=$(OCP4_AGENT_URL) \
+                      --set-string secret.data.ocp4Token=$(OCP4TOKEN) \
+                      --set-string secret.data.ocpUser=$(OCP_LDAP_USER) \
+                      --set-string secret.data.ocpUserPassword=$(OCPLDAPUSERPASSWORD) \
+                      --set-string secret.data.serviceUser=$(SERVICE_USER) \
+                      --set-string containers.nodejsapp.env.ENVIRONMENT=$(ENVIRONMENT) \
+                      $(SERVICENAME) \
+                      CICD_Agent_Portal_cicd/helm_services/
+                  displayName: Helm Dry Run
+                
+                - bash: |
+                    set -x
+                    BUILD_BUILDID_LOWER=$(echo $(revisionId_services) | tr '[:upper:]' '[:lower:]')
+                    BUILD_SOURCEBRANCHNAME_LOWER=$(echo $(sourceBranch) | awk -F"/" '{print $NF}' | tr '[:upper:]' '[:lower:]')
+                    TAG=$BUILD_BUILDID_LOWER"_"$BUILD_SOURCEBRANCHNAME_LOWER
+
+                    oc login --token=$(OCP4_CICDDEPLOY_TOKEN) --server=$(OCP4_URL)
+                    oc project $(PROJECT)
+
+                    echo "Starting Helm Deployment..."
+                    helm upgrade -n $(PROJECT) --install --atomic --wait --timeout 10m0s --history-max 3 \
+                      --set-string deployment.name=$(SERVICENAME) \
+                      --set-string deployment.replica=$(REPLICA) \
+                      --set-string containers.repository=$(DOCKER_REGISTRY_COMMON) \
+                      --set-string containers.nodejsapp.image.tag=$TAG \
+                      --set-string containers.nodejsapp.image.name=$(SERVICENAME) \
+                      --set-string containers.nodejsapp.resourceLimits.cpu=$(CPU_LIMIT) \
+                      --set-string containers.nodejsapp.resourceLimits.memory=$(MEMORY_LIMIT) \
+                      --set-string containers.nodejsapp.resourceRequests.cpu=$(CPU_REQUEST) \
+                      --set-string containers.nodejsapp.resourceRequests.memory=$(MEMORY_REQUEST) \
+                      --set-string secret.data.encryptionKey=$(ENCRYPTION_KEY) \
+                      --set-string secret.data.dbURL=$(DBURLSECRET) \
+                      --set-string secret.data.keycloakClientID=$(CLIENTIDSECRET) \
+                      --set-string secret.data.keycloakUsername=$(ADO_AGENT_USERNAME) \
+                      --set-string secret.data.keycloakPassword=$(KEYCLOAKPASSWORDSECRET) \
+                      --set-string secret.data.keycloakClientUID=$(KEYCLOAK_CLIENT_UID) \
+                      --set-string secret.data.keycloakAdminRoleId=$(KEYCLOAK_ADMIN_ROLE_ID) \
+                      --set-string secret.data.keycloakStandardRoleId=$(KEYCLOAK_STANDARD_ROLE_ID) \
+                      --set-string secret.data.keycloakMemberRoleId=$(KEYCLOAK_MEMBER_ROLE_ID) \
+                      --set-string secret.data.sparkRootCert=$(SPARK_ROOT_CERT) \
+                      --set-string secret.data.adoPatToken=$(ADOPATTOKENSECRET) \
+                      --set-string secret.data.ocp4Url=$(OCP4_URL) \
+                      --set-string secret.data.ocp4AgentUrl=$(OCP4_AGENT_URL) \
+                      --set-string secret.data.ocp4Token=$(OCP4TOKEN) \
+                      --set-string secret.data.ocpUser=$(OCP_LDAP_USER) \
+                      --set-string secret.data.ocpUserPassword=$(OCPLDAPUSERPASSWORD) \
+                      --set-string secret.data.serviceUser=$(SERVICE_USER) \
+                      --set-string containers.nodejsapp.env.ENVIRONMENT=$(ENVIRONMENT) \
+                      $(SERVICENAME) \
+                      CICD_Agent_Portal_cicd/helm_services/
+                  displayName: Helm Upgrade

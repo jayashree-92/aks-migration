@@ -1,0 +1,28 @@
+# Default values for chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+#NB: We need to quote the yes and no else helm will change it to true and false
+
+deployment:
+  name: "kong-gateway"
+  replica: 1
+  terminationGracePeriodSeconds: 30
+
+route:
+  annotations:
+    haproxy.router.openshift.io/timeout: "30s"
+
+containers:
+  repository: "docker-public.artifacts.internal.spark.co.nz"
+  kong:
+    image:
+      project: "kong"
+      name: "kong-gateway"
+      tag: "latest"
+      pullPolicy: "Always"
+    resourceLimits:
+      cpu: "600m"
+      memory: "600Mi"
+    resourceRequests:
+      cpu: "200m"
+      memory: "600Mi"

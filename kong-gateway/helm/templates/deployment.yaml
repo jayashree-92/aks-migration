@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: {{ .Values.deployment.name }}
+  name: {{ .Values.deployment.name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Values.deployment.name }}
+  replicas: {{ .Values.deployment.replica }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.deployment.name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: "/kong/declarative/kong.yml"
+            - name: KONG_PROXY_ACCESS_LOG
+              value: "/dev/stdout"
+            - name: KONG_ADMIN_ACCESS_LOG
+              value: "/dev/stdout"
+            - name: KONG_PROXY_ERROR_LOG
+              value: "/dev/stderr"
+            - name: KONG_ADMIN_LISTEN
+              value: "0.0.0.0:8001"
+            - name: KONG_ADMIN_GUI_URL
+              value: "http://localhost:8002"
+            - name: KONG_LICENSE_DATA
+              value: ""
+            - name: KONG_NGINX_WORKER_PROCESSES
+              value: "4"
+          image: {{ .Values.containers.repository }}/{{ .Values.containers.kong.image.project }}/{{ .Values.containers.kong.image.name }}:{{ .Values.containers.kong.image.tag }}
+          imagePullPolicy: {{ .Values.containers.kong.image.pullPolicy }}
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /status
+              port: 8001
+              scheme: HTTP
+            initialDelaySeconds: 180
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: {{ .Values.deployment.name }}
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+            - containerPort: 8001
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 10
+            httpGet:
+              path: /status
+              port: 8001
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: {{ .Values.containers.kong.resourceLimits.cpu }}
+              memory: {{ .Values.containers.kong.resourceLimits.memory }}
+            requests:
+              cpu: {{ .Values.containers.kong.resourceRequests.cpu }}
+              memory: {{ .Values.containers.kong.resourceRequests.memory }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /kong/declarative
+              name: {{ .Values.deployment.name }}-configmap
+      dnsPolicy: ClusterFirst
+      imagePullSecrets:
+        - name: prod-registry
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: {{ .Values.deployment.terminationGracePeriodSeconds }}
+      volumes:
+        - configMap:
+            defaultMode: 420
+            name: {{ .Values.deployment.name }}-configmap
+          name: {{ .Values.deployment.name }}-configmap
+

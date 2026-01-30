@@ -1,0 +1,169 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: {{ .Values.deployment.name }}
+  name: {{ .Values.deployment.name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Values.deployment.name }}
+  replicas: {{ .Values.deployment.replica }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.deployment.name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - env:
+            - name: TZ
+              value: {{ .Values.containers.nodejsapp.env.timezone }}
+            - name: ENV
+              value: {{ .Values.containers.nodejsapp.env.ENVIRONMENT }}
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: ENCRYPTION_KEY
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_CLIENT_ID
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_USERNAME
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_PASSWORD
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_CLIENT_UID
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_CLIENT_UID
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_ADMIN_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_ADMIN_ROLE_ID
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_STANDARD_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_STANDARD_ROLE_ID
+                  name: {{ .Values.deployment.name }}
+            - name: KEYCLOAK_MEMBER_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  key: KEYCLOAK_MEMBER_ROLE_ID
+                  name: {{ .Values.deployment.name }}
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  key: DB_URL
+                  name: {{ .Values.deployment.name }}
+            - name: NODE_EXTRA_CA_CERTS
+              valueFrom:
+                secretKeyRef:
+                  key: SPARK_ROOT_CERT
+                  name: {{ .Values.deployment.name }}
+            - name: ADO_PAT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  key: ADO_PAT_TOKEN
+                  name: {{ .Values.deployment.name }}
+            - name: OCP4_URL
+              valueFrom:
+                secretKeyRef:
+                  key: OCP4_URL
+                  name: {{ .Values.deployment.name }}
+            - name: OCP4_AGENT_URL
+              valueFrom:
+                secretKeyRef:
+                  key: OCP4_AGENT_URL
+                  name: {{ .Values.deployment.name }}
+            - name: OCP4_CICDDEPLOY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  key: OCP4_CICDDEPLOY_TOKEN
+                  name: {{ .Values.deployment.name }}
+            - name: OCP_LDAP_USER
+              valueFrom:
+                secretKeyRef:
+                  key: OCP_LDAP_USER
+                  name: {{ .Values.deployment.name }}
+            - name: OCP_LDAP_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: OCP_LDAP_USER_PASSWORD
+                  name: {{ .Values.deployment.name }}
+            - name: SERVICE_USER
+              valueFrom:
+                secretKeyRef:
+                  key: SERVICE_USER
+                  name: {{ .Values.deployment.name }}
+          envFrom:
+            - prefix: ldap_
+              secretRef:
+                name: ldapbind
+          image:  {{ .Values.containers.repository }}/{{ .Values.containers.nodejsapp.image.project }}/{{ .Values.containers.nodejsapp.image.name }}:{{ .Values.containers.nodejsapp.image.tag }}
+          imagePullPolicy: {{ .Values.containers.nodejsapp.image.pullPolicy }}
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /{{ .Values.deployment.name }}/api/healthcheck
+              port: 3007
+              scheme: HTTP
+            initialDelaySeconds: 180
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: {{ .Values.deployment.name }}
+          ports:
+            - containerPort: 3001
+              protocol: TCP
+            - containerPort: 3007
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 10
+            httpGet:
+              path: /{{ .Values.deployment.name }}/api/healthcheck
+              port: 3007
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: {{ .Values.containers.nodejsapp.resourceLimits.cpu }}
+              memory: {{ .Values.containers.nodejsapp.resourceLimits.memory }}
+            requests:
+              cpu: {{ .Values.containers.nodejsapp.resourceRequests.cpu }}
+              memory: {{ .Values.containers.nodejsapp.resourceRequests.memory }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /appl/cicd/products/{{ .Values.deployment.name }}/properties
+              name: {{ .Values.deployment.name }}-configmap
+      dnsPolicy: ClusterFirst
+      imagePullSecrets:
+        - name: prod-registry
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: {{ .Values.deployment.terminationGracePeriodSeconds }}
+      volumes:
+        - configMap:
+            defaultMode: 420
+            name: {{ .Values.deployment.name }}-configmap
+          name: {{ .Values.deployment.name }}-configmap

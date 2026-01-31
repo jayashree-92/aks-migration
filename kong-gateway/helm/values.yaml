@@ -8,9 +8,21 @@ deployment:
   replica: 1
   terminationGracePeriodSeconds: 30
 
-route:
+ingress:
+  enabled: true
+  className: "nginx"
   annotations:
-    haproxy.router.openshift.io/timeout: "30s"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: dev-kong.your-domain.com  # Update with actual dev domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: kong-gateway-tls
+      hosts:
+        - dev-kong.your-domain.com  # Update with actual dev domain
 
 containers:
   repository: "docker-public.artifacts.internal.spark.co.nz"

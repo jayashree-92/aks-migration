@@ -9,12 +9,21 @@ deployment:
   terminationGracePeriodSeconds: 30
   serviceAccount: ""
 
-route:
+ingress:
+  enabled: true
+  className: "nginx"
   annotations:
-    haproxy.router.openshift.io/balance: "roundrobin"
-    haproxy.router.openshift.io/disable_cookies: 'true'
-    haproxy.router.openshift.io/timeout: "30s"
-    openshift.io/host.generated: 'true'
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: dev-ui.your-domain.com  # Update with actual dev domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: nextjsapp-tls
+      hosts:
+        - dev-ui.your-domain.com  # Update with actual dev domain
 
 containers:
   nextjsapp:

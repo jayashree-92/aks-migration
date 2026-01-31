@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Introduction 
 TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
 
@@ -20,3 +21,7 @@ If you want to learn more about creating good readme files then refer the follow
 - [Chakra Core](https://github.com/Microsoft/ChakraCore)
 
 t
+=======
+# aks-migration
+OCP to KAS migration
+>>>>>>> 3f011e0ffd1249f90765d2b19048bf5eef2055c5
